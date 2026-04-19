@@ -1,0 +1,6 @@
+{
+  "name": "agent-skills",
+  "version": "1.0.0",
+  "description": "Skill library management for Claude Code agents — create, index, and track invocation outcomes",
+  "license": "Apache-2.0"
+}
