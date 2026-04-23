@@ -2,18 +2,29 @@
 /**
  * skill-log.js — Log skill invocation outcomes so skills can be refined over time
  *
+ * Every time a skill from memory/skills/ is invoked, call this to record
+ * whether it worked. Aggregated outcomes feed the skill-refinement loop:
+ * skills with recurring failures get flagged for review or rewrite.
+ *
  * Usage:
- *   node skill-log.js --skill <slug> --outcome success
- *   node skill-log.js --skill <slug> --outcome failure --note "reason"
- *   node skill-log.js --skill <slug> --outcome partial --context "<where>"
+ *   node scripts/skill-log.js --skill <slug> --outcome success
+ *   node scripts/skill-log.js --skill <slug> --outcome failure --note "reason"
+ *   node scripts/skill-log.js --skill <slug> --outcome partial --context "<where>"
  *
- *   node skill-log.js --report                 # summary of all skills
- *   node skill-log.js --report --skill <slug>  # one skill detail
- *   node skill-log.js --flag-recurring         # emit slugs needing refinement (3+ consecutive failures)
+ *   node scripts/skill-log.js --report                 # summary of all skills
+ *   node scripts/skill-log.js --report --skill <slug>  # one skill detail
+ *   node scripts/skill-log.js --flag-recurring         # emit slugs that need refinement
  *
- * Options:
- *   --skills-dir <path>   — skills directory (default: ./skills)
- *   --outcomes-file <path>— where to write outcomes JSON (default: ./skill-outcomes.json)
+ * Writes to: data/skill-outcomes.json
+ *
+ * Outcomes schema:
+ *   {
+ *     "<slug>": {
+ *       invocations: [{ ts, outcome, context, note }],
+ *       success_count, failure_count, partial_count,
+ *       first_used, last_used
+ *     }
+ *   }
  */
 
 'use strict';
@@ -21,44 +32,45 @@
 const fs   = require('fs');
 const path = require('path');
 
-const DEFAULT_SKILLS_DIR   = path.join(process.cwd(), 'skills');
-const DEFAULT_OUTCOMES_FILE = path.join(process.cwd(), 'skill-outcomes.json');
+const WORKSPACE   = path.join(__dirname, '..');
+const SKILLS_DIR  = path.join(WORKSPACE, 'memory', 'skills');
+const OUT_FILE    = path.join(WORKSPACE, 'data', 'skill-outcomes.json');
 
-const MAX_INVOCATIONS_PER_SKILL = 100;
-const RECURRING_FAILURE_THRESHOLD = 3;
+const MAX_INVOCATIONS_PER_SKILL = 100; // rolling window to bound file size
+const RECURRING_FAILURE_THRESHOLD = 3;  // consecutive failures that flag a skill for refinement
 
+// ── CLI parsing ──────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--skill')         out.skill        = argv[++i];
-    if (a === '--outcome')       out.outcome      = argv[++i];
-    if (a === '--note')          out.note         = argv[++i];
-    if (a === '--context')       out.context      = argv[++i];
-    if (a === '--skills-dir')    out.skillsDir    = argv[++i];
-    if (a === '--outcomes-file') out.outcomesFile = argv[++i];
-    if (a === '--report')        out.report       = true;
+    if (a === '--skill')     out.skill   = argv[++i];
+    if (a === '--outcome')   out.outcome = argv[++i];
+    if (a === '--note')      out.note    = argv[++i];
+    if (a === '--context')   out.context = argv[++i];
+    if (a === '--report')    out.report  = true;
     if (a === '--flag-recurring') out.flagRecurring = true;
   }
   return out;
 }
 
-function loadStore(outcomesFile) {
-  if (!fs.existsSync(outcomesFile)) return {};
-  try { return JSON.parse(fs.readFileSync(outcomesFile, 'utf8')); }
+function loadStore() {
+  if (!fs.existsSync(OUT_FILE)) return {};
+  try { return JSON.parse(fs.readFileSync(OUT_FILE, 'utf8')); }
   catch { return {}; }
 }
 
-function saveStore(store, outcomesFile) {
-  fs.mkdirSync(path.dirname(outcomesFile), { recursive: true });
-  fs.writeFileSync(outcomesFile, JSON.stringify(store, null, 2));
+function saveStore(store) {
+  fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
+  fs.writeFileSync(OUT_FILE, JSON.stringify(store, null, 2));
 }
 
-function skillExists(slug, skillsDir) {
-  return fs.existsSync(path.join(skillsDir, `${slug}.md`));
+function skillExists(slug) {
+  return fs.existsSync(path.join(SKILLS_DIR, `${slug}.md`));
 }
 
-function logInvocation({ skill, outcome, context, note }, skillsDir, outcomesFile) {
+// ── Log one invocation ───────────────────────────────────────────────────────
+function logInvocation({ skill, outcome, context, note }) {
   if (!skill || !outcome) {
     console.error('Usage: skill-log.js --skill <slug> --outcome success|failure|partial [--note ...] [--context ...]');
     process.exit(1);
@@ -67,11 +79,11 @@ function logInvocation({ skill, outcome, context, note }, skillsDir, outcomesFil
     console.error(`--outcome must be one of: success, failure, partial (got: ${outcome})`);
     process.exit(1);
   }
-  if (!skillExists(skill, skillsDir)) {
-    console.error(`Warning: skill file not found at ${path.join(skillsDir, skill + '.md')} — logging anyway`);
+  if (!skillExists(skill)) {
+    console.error(`Warning: skill file not found at memory/skills/${skill}.md — logging anyway`);
   }
 
-  const store = loadStore(outcomesFile);
+  const store = loadStore();
   const now = new Date().toISOString();
 
   if (!store[skill]) {
@@ -89,16 +101,18 @@ function logInvocation({ skill, outcome, context, note }, skillsDir, outcomesFil
   store[skill].last_used = now;
   store[skill][`${outcome}_count`] = (store[skill][`${outcome}_count`] || 0) + 1;
 
+  // Roll the window
   if (store[skill].invocations.length > MAX_INVOCATIONS_PER_SKILL) {
     store[skill].invocations = store[skill].invocations.slice(-MAX_INVOCATIONS_PER_SKILL);
   }
 
-  saveStore(store, outcomesFile);
+  saveStore(store);
   console.log(`Logged ${outcome} for skill "${skill}" (total: ${store[skill].success_count}✅ / ${store[skill].failure_count}❌ / ${store[skill].partial_count}~)`);
 }
 
-function report(slug, outcomesFile) {
-  const store = loadStore(outcomesFile);
+// ── Report all skills or one ─────────────────────────────────────────────────
+function report(slug) {
+  const store = loadStore();
   const entries = slug ? (store[slug] ? [[slug, store[slug]]] : []) : Object.entries(store);
 
   if (entries.length === 0) {
@@ -116,8 +130,10 @@ function report(slug, outcomesFile) {
   }
 }
 
-function flagRecurring(outcomesFile) {
-  const store = loadStore(outcomesFile);
+// ── Flag skills needing refinement ───────────────────────────────────────────
+// A skill is flagged when the last N invocations are all failures.
+function flagRecurring() {
+  const store = loadStore();
   const flagged = [];
   for (const [slug, data] of Object.entries(store)) {
     const recent = data.invocations.slice(-RECURRING_FAILURE_THRESHOLD);
@@ -135,14 +151,13 @@ function flagRecurring(outcomesFile) {
   if (flagged.length === 0) console.log('# No skills with recurring failures');
 }
 
+// ── Main ──────────────────────────────────────────────────────────────────────
 const args = parseArgs(process.argv.slice(2));
-const skillsDir = args.skillsDir ? path.resolve(args.skillsDir) : DEFAULT_SKILLS_DIR;
-const outcomesFile = args.outcomesFile ? path.resolve(args.outcomesFile) : DEFAULT_OUTCOMES_FILE;
 
 if (args.flagRecurring) {
-  flagRecurring(outcomesFile);
+  flagRecurring();
 } else if (args.report) {
-  report(args.skill, outcomesFile);
+  report(args.skill);
 } else {
-  logInvocation(args, skillsDir, outcomesFile);
+  logInvocation(args);
 }
