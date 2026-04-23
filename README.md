@@ -4,84 +4,70 @@ Skill library management for Claude Code agents. Create markdown skill files wit
 
 > Part of [The Agent Crafting Table](https://github.com/Agent-Crafting-Table) — standalone Claude Code agent components.
 
+## Drop-in
+
+```bash
+# Copy scripts to your agent workspace
+cp skill-create.js /your/workspace/scripts/skill-create.js
+cp skill-log.js    /your/workspace/scripts/skill-log.js
+
+# Create your skills directory and initialize the index
+mkdir -p /your/workspace/memory/skills
+node scripts/skill-create.js --refresh-index
+```
+
+Add to your `CLAUDE.md` (or `AGENTS.md`):
+
+```markdown
+## Skills
+- Read `memory/skills/INDEX.md` at session start (summaries only)
+- Load the full skill file on-demand when one becomes relevant
+- After invoking a skill: `node scripts/skill-log.js --skill <slug> --outcome success|failure|partial`
+```
+
 ## The pattern
 
-Skills are reusable procedures your agent has learned — how to fix a specific error, how to run a deployment, how to handle a recurring task. Instead of re-explaining from scratch each session, the agent loads `skills/INDEX.md` (summaries only) at startup and pulls the full skill on demand.
+Skills are reusable procedures your agent has learned — how to fix a specific error, how to run a deployment, how to handle a recurring task. Instead of re-explaining from scratch each session, the agent loads `memory/skills/INDEX.md` (summaries only) at startup and pulls the full skill on demand.
 
 ```
-skills/
+memory/skills/
   INDEX.md              ← auto-generated from all skill files
   fix-merge-conflict.md
   deploy-to-staging.md
   recover-db-backup.md
-skill-outcomes.json     ← outcome log (auto-created)
-```
-
-## Setup
-
-No dependencies — uses only Node.js built-ins.
-
-```bash
-node skill-create.js --refresh-index  # initialize INDEX.md
-```
-
-Add to your `CLAUDE.md`:
-```markdown
-**Skills**: Read `skills/INDEX.md` at session start. Load full skill file on-demand when relevant.
-After invoking a skill: `node skill-log.js --skill <slug> --outcome success|failure|partial`
+data/skill-outcomes.json  ← outcome log (auto-created)
 ```
 
 ## Creating skills
 
 ```bash
-node skill-create.js \
+node scripts/skill-create.js \
   --name "Fix merge conflict" \
   --summary "Resolve git rebase conflicts when staging branch is behind main" \
   --body "## Steps\n1. git fetch origin\n2. git rebase origin/main\n3. git checkout --theirs . for binary conflicts\n4. git add . && git rebase --continue"
 
 # From stdin
-cat my-procedure.md | node skill-create.js --name "Deploy to prod" --summary "Full production deploy"
-
-# Sources: manual, self-healing, session-summary, discord-triage, variant-review
-node skill-create.js --name "..." --summary "..." --source self-healing
-
-# Skip if exists
-node skill-create.js --name "..." --summary "..." --if-missing
+cat my-procedure.md | node scripts/skill-create.js --name "Deploy to prod" --summary "Full production deploy"
 
 # Rebuild index only
-node skill-create.js --refresh-index
-
-# Custom skills directory
-node skill-create.js --name "..." --summary "..." --skills-dir /my/agent/skills
+node scripts/skill-create.js --refresh-index
 ```
 
 ## Logging outcomes
 
 ```bash
-node skill-log.js --skill fix-merge-conflict --outcome success
-node skill-log.js --skill deploy-to-staging --outcome failure --note "SSH timeout on step 3"
-node skill-log.js --skill recover-db-backup --outcome partial --context "partial restore only"
+node scripts/skill-log.js --skill fix-merge-conflict --outcome success
+node scripts/skill-log.js --skill deploy-to-staging  --outcome failure --note "npm build failed"
+node scripts/skill-log.js --skill recover-db-backup  --outcome partial --context "partial restore only"
 
-node skill-log.js --report                         # all skills
-node skill-log.js --report --skill fix-merge-conflict  # one skill
-node skill-log.js --flag-recurring                 # skills with 3+ consecutive failures
+# Summary report
+node scripts/skill-log.js --report
+
+# Flag skills that keep failing
+node scripts/skill-log.js --flag-recurring
 ```
 
-## Skill file format
+## Requirements
 
-```markdown
----
-name: Fix merge conflict
-summary: Resolve git rebase conflicts when staging branch is behind main
-source: manual
-created: 2026-04-19
-last_used: 2026-04-19
-use_count: 1
----
-
-## Steps
-
-1. `git fetch origin`
-2. `git rebase origin/main`
-...
-```
+- Node.js 16+
+- Zero runtime dependencies
