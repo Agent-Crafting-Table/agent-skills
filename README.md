@@ -4,6 +4,68 @@ Skill library management for Claude Code agents. Create markdown skill files wit
 
 > Part of [The Agent Crafting Table](https://github.com/Agent-Crafting-Table) — standalone Claude Code agent components.
 
+## How It Works
+
+```mermaid
+flowchart TD
+    A[Agent encounters recurring task] --> B{Skill exists in INDEX.md?}
+    B -->|yes| C[Load full skill file on-demand]
+    B -->|no| D["skill-create.js --name --summary --body"]
+    D --> E[Skill markdown file created
+with YAML frontmatter]
+    E --> F["skill-create.js --refresh-index"]
+    F --> G[INDEX.md rebuilt
+all summaries in one file]
+
+    C --> H[Agent executes skill procedure]
+    H --> I["skill-log.js --skill slug --outcome success|failure|partial"]
+    I --> J[data/skill-outcomes.json updated
+rolling invocation log]
+    J --> K{"3 consecutive
+failures?"}
+    K -->|no| L[done]
+    K -->|yes| M[skill flagged as recurring-failure]
+    M --> N[Optional: feed into evolution-loop
+for automated refinement]
+
+    subgraph "Session Init Pattern"
+        O[Agent reads INDEX.md at startup
+summaries only — low token cost]
+        O --> P[Specific skill loaded on-demand
+only when relevant]
+    end
+```
+
+```mermaid
+graph LR
+    subgraph "memory/skills/"
+        IDX["INDEX.md
+auto-generated
+title + summary + slug
+for every skill"]
+        SK1["fix-merge-conflict.md
+---
+title: Fix merge conflict
+summary: ...
+---
+## Steps
+1. git fetch origin..."]
+        SK2["deploy-to-staging.md"]
+        SK3["recover-db-backup.md"]
+    end
+
+    subgraph "data/"
+        OUT["skill-outcomes.json
+rolling invocation history
+per-skill success/failure/partial"]
+    end
+
+    IDX -.->|loaded at session start| AGENT[Claude Code Agent]
+    SK1 -.->|loaded on-demand| AGENT
+    OUT -->|"--flag-recurring"| FLAGS[Flagged skills
+for refinement]
+```
+
 ## Drop-in
 
 ```bash
